@@ -10,8 +10,17 @@ from dotenv import load_dotenv
 import os
 from langchain.prompts import PromptTemplate
 
-# 加载环境变量
+# Load environment variables - try to load from .env file first, then fall back to st.secrets
 load_dotenv()
+
+# Get OpenAI API key from environment or Streamlit secrets
+if os.getenv("OPENAI_API_KEY"):
+    openai_api_key = os.getenv("OPENAI_API_KEY")
+elif 'OPENAI_API_KEY' in st.secrets:
+    openai_api_key = st.secrets["OPENAI_API_KEY"]
+else:
+    st.error("OpenAI API key not found. Please set it in .env file or Streamlit secrets.")
+    st.stop()
 
 # 设置页面标题
 st.set_page_config(page_title="AWS文档QA助手")
@@ -27,30 +36,38 @@ if "chat_history" not in st.session_state:
 # 加载PDF
 @st.cache_resource
 def load_and_process_pdf():
-    # 直接加载本地PDF文件
-    loader = PyPDFLoader("aws-overview.pdf")
-    pages = loader.load()
-    
-    # 分割文本
-    text_splitter = RecursiveCharacterTextSplitter(
-        chunk_size=1000,
-        chunk_overlap=200
-    )
-    splits = text_splitter.split_documents(pages)
+    try:
+        # 直接加载本地PDF文件
+        loader = PyPDFLoader("aws-overview.pdf")
+        pages = loader.load()
+        
+        # 分割文本
+        text_splitter = RecursiveCharacterTextSplitter(
+            chunk_size=1000,
+            chunk_overlap=200
+        )
+        splits = text_splitter.split_documents(pages)
 
-    # 创建向量存储
-    embeddings = OpenAIEmbeddings()
-    vectorstore = FAISS.from_documents(splits, embeddings)
-    
-    return vectorstore
+        # 创建向量存储
+        embeddings = OpenAIEmbeddings(openai_api_key=openai_api_key)
+        vectorstore = FAISS.from_documents(splits, embeddings)
+        
+        return vectorstore
+    except Exception as e:
+        st.error(f"Error loading PDF: {str(e)}")
+        return None
 
 # 加载文档并创建向量存储
 try:
     vectorstore = load_and_process_pdf()
     
     # 如果conversation还没有初始化,创建对话链
-    if st.session_state.conversation is None:
-        llm = ChatOpenAI(temperature=0.7, model_name="gpt-4o-mini")
+    if st.session_state.conversation is None and vectorstore is not None:
+        llm = ChatOpenAI(
+            temperature=0.7, 
+            model_name="gpt-4-0125-preview",
+            openai_api_key=openai_api_key
+        )
         memory = ConversationBufferMemory(
             memory_key="chat_history",
             return_messages=True
@@ -78,7 +95,7 @@ try:
             )}
         )
 except Exception as e:
-    st.error(f"加载文档时出错: {str(e)}")
+    st.error(f"初始化系统时出错: {str(e)}")
 
 # 用户输入
 if prompt := st.chat_input("请输入您关于AWS的问题"):
